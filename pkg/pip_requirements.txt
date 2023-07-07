@@ -1,0 +1,6 @@
+spaceone-core
+spaceone-api
+schematics
+pandas
+google-api-python-client
+
