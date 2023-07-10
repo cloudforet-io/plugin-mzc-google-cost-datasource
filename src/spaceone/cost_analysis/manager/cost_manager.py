@@ -35,6 +35,8 @@ class CostManager(BaseManager):
         if is_sync == 'false':
             self._update_sync_state(options, secret_data, schema, service_account_id)
 
+        exchange_rate_info = self._get_exchange_rate_info()
+
         prefix = f'billing-data/{sub_billing_account}'
         files_info = self.google_storage_connector.list_objects(_DEFAULT_BUCKET_NAME, prefix=prefix)
         file_names = [file_info['name'] for file_info in files_info]
@@ -43,13 +45,15 @@ class CostManager(BaseManager):
         for date in date_ranges:
             year, month = date.split('-')
 
-            target_file_path = prefix + f'/{year}/{month}/'
-            if target_file := self._create_target_file_path(file_names, target_file_path):
+            if exchange_rate := self._check_exchange_rate(year, month, exchange_rate_info):
 
-                blob = self.google_storage_connector.get_blob(_DEFAULT_BUCKET_NAME, target_file)
-                response_stream = self._get_cost_data(data=blob.download_as_bytes(), target_file=target_file)
-                for results in response_stream:
-                    yield self._make_cost_data(results, account_id)
+                target_file_path = prefix + f'/{year}/{month}/'
+                if target_file := self._create_target_file_path(file_names, target_file_path):
+
+                    blob = self.google_storage_connector.get_blob(_DEFAULT_BUCKET_NAME, target_file)
+                    response_stream = self._get_cost_data(data=blob.download_as_bytes(), target_file=target_file)
+                    for results in response_stream:
+                        yield self._make_cost_data(results, account_id, exchange_rate)
 
             else:
                 continue
@@ -122,18 +126,19 @@ class CostManager(BaseManager):
             yield costs_data[offset:offset + _PAGE_SIZE]
 
     @staticmethod
-    def _make_cost_data(results, account_id):
+    def _make_cost_data(results, account_id, exchange_rate):
         costs_data = []
 
         for result in results:
             try:
                 data = {
                     'cost': result['Final Cost'],
+                    'usd_cost': result['Final Cost'] * (1 / exchange_rate),
                     'currency': result['Currency'],
                     'usage_quantity': result['Usage'],
                     'provider': 'google_cloud',
                     'product': result['Service Name'],
-                    'region_code': result.get('Region', 'global'),
+                    'region_code': result.get('Region') if result.get('Region') else 'global',
                     'account': result.get('Project ID'),
                     'usage_type': result['SKU Name'],
                     'usage_unit': result['Usage Unit'],
@@ -154,3 +159,22 @@ class CostManager(BaseManager):
             else:
                 costs_data.append(data)
         return costs_data
+
+    def _get_exchange_rate_info(self):
+        file_path = 'settings/exchange_rate.csv'
+        blob = self.google_storage_connector.get_blob(_DEFAULT_BUCKET_NAME, file_path)
+        exchange_rate_data = blob.download_as_bytes()
+
+        data_frame = pd.read_csv(io.BytesIO(exchange_rate_data))
+        data_frame = data_frame.replace({np.nan: None})
+        costs_data = data_frame.to_dict('records')
+        return costs_data
+
+    @staticmethod
+    def _check_exchange_rate(year, month, exchange_rate_info):
+        for exchange_rate in exchange_rate_info:
+            if exchange_rate['year'] == int(year) and exchange_rate['month'] == int(month):
+                return exchange_rate['KRW']
+
+        _LOGGER.debug(f'[_exist_exchange_rate] exchange_rate is not exist({year}-{month})')
+        return None

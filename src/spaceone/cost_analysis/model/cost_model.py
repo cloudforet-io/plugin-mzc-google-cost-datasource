@@ -6,7 +6,8 @@ __all__ = ['Cost']
 
 class Cost(Model):
     cost = FloatType(required=True)
-    currency = StringType(default='USD')
+    usd_cost = FloatType(required=True)
+    currency = StringType(default='KRW')
     usage_quantity = FloatType(required=True)
     provider = StringType(required=True)
     region_code = StringType()
