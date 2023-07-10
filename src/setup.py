@@ -35,6 +35,7 @@ setup(
         'spaceone-api',
         'schematics',
         'google-api-python-client',
+        'google-cloud-storage',
         'pandas'
     ],
     zip_safe=False,

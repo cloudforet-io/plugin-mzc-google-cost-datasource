@@ -3,4 +3,5 @@ spaceone-api
 schematics
 pandas
 google-api-python-client
+google-cloud-storage
 
