@@ -7,11 +7,7 @@ __all__ = ['Tasks']
 
 class TaskOptions(Model):
     start = StringType(required=True)
-    service_account_id = StringType(required=True)
-    service_account_name = StringType(required=True)
-    account_id = StringType(required=True)
-    is_sync = StringType(required=True, choices=('true', 'false'))
-    sub_billing_account = StringType(required=True)
+    bucket_name = StringType(required=True)
 
 
 class Task(Model):

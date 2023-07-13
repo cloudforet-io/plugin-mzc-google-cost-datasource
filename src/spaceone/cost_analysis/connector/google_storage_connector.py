@@ -24,7 +24,6 @@ class GoogleStorageConnector(BaseConnector):
         self.session = None
         self.storage_client = None
         self.google_client = None
-        self.s3_bucket = None
 
     def create_session(self, options: dict, secret_data: dict, schema: str):
         self._check_secret_data(secret_data)
@@ -33,6 +32,11 @@ class GoogleStorageConnector(BaseConnector):
         credentials = google.oauth2.service_account.Credentials.from_service_account_info(secret_data)
         self.storage_client = storage.Client(project=secret_data['project_id'], credentials=credentials)
         self.google_client = build('storage', 'v1', credentials=credentials)
+
+    def list_buckets(self):
+        buckets = self.google_client.buckets().list(project=self.project_id).execute()
+        return buckets.get('items', [])
+
 
     def list_objects(self, bucket_name, prefix=None):
         self.google_client.buckets().get(bucket=bucket_name).execute()
