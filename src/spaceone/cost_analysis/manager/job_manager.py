@@ -27,16 +27,16 @@ class JobManager(BaseManager):
 
         collect_info = secret_data['collect']
         bucket_name = collect_info['bucket']
-        sub_account_ids = collect_info.get('sub_account_id', [])
+        sub_billing_account_ids = collect_info.get('sub_account_id', [])
 
         for bucket in self.google_storage_connector.list_buckets():
             if bucket['name'] == bucket_name:
-                if sub_account_ids:
-                    for sub_account_id in sub_account_ids:
+                if sub_billing_account_ids:
+                    for sub_billing_account_id in sub_billing_account_ids:
                         tasks.append({
                             'task_options': {
                                 'bucket_name': bucket_name,
-                                'sub_account_id': sub_account_id,
+                                'sub_billing_account_id': sub_billing_account_id,
                                 'start': start_date
                             }
                         })
