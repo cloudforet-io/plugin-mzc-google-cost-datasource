@@ -61,5 +61,5 @@ class GoogleStorageConnector(BaseConnector):
         if 'client_email' not in secret_data:
             raise ERROR_REQUIRED_PARAMETER(key='secret_data.client_email')
 
-        if 'buckets' not in secret_data:
-            raise ERROR_REQUIRED_PARAMETER(key='secret_data.buckets')
+        if 'collect' not in secret_data:
+            raise ERROR_REQUIRED_PARAMETER(key='secret_data.collect')

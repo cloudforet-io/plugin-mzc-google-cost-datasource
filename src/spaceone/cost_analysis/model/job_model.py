@@ -8,6 +8,7 @@ __all__ = ['Tasks']
 class TaskOptions(Model):
     start = StringType(required=True)
     bucket_name = StringType(required=True)
+    sub_account_id = StringType(default=None)
 
 
 class Task(Model):

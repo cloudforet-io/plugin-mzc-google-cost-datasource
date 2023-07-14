@@ -25,12 +25,29 @@ class JobManager(BaseManager):
         changed_time = start_time
         self.google_storage_connector.create_session(options, secret_data, schema)
 
-        buckets = secret_data['buckets']
+        collect_info = secret_data['collect']
+        bucket_name = collect_info['bucket']
+        sub_account_ids = collect_info.get('sub_account_id', [])
+
         for bucket in self.google_storage_connector.list_buckets():
-            if bucket['name'].startswith('mzc-'):
-                prefix, bucket_name = bucket['name'].split('-')
-                if bucket_name in buckets:
-                    tasks.append({'task_options': {'bucket_name': bucket_name, 'start': start_date}})
+            if bucket['name'] == bucket_name:
+                if sub_account_ids:
+                    for sub_account_id in sub_account_ids:
+                        tasks.append({
+                            'task_options': {
+                                'bucket_name': bucket_name,
+                                'sub_account_id': sub_account_id,
+                                'start': start_date
+                            }
+                        })
+                        changed.append({'start': changed_time})
+                else:
+                    tasks.append({
+                        'task_options': {
+                            'bucket_name': bucket_name,
+                            'start': start_date
+                        }
+                    })
                     changed.append({'start': changed_time})
 
         tasks = Tasks({'tasks': tasks, 'changed': changed})
