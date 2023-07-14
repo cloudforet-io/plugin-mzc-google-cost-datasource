@@ -34,6 +34,7 @@ class CostManager(BaseManager):
         sub_billing_account_ids = self._list_sub_billing_account_ids(file_names)
 
         date_ranges = self._get_date_range(start)
+        _LOGGER.debug(f'[get_data] task_options: {task_options} / date ranges: {date_ranges[0]} ~ {date_ranges[-1]})')
         for date in date_ranges:
             year, month = date.split('-')
             end_date = self._get_end_date(year, month)
