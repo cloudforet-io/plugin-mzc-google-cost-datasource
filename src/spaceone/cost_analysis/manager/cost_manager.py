@@ -1,5 +1,6 @@
 import logging
 import io
+import re
 import pandas as pd
 import numpy as np
 from datetime import datetime
@@ -7,82 +8,54 @@ from dateutil import rrule
 
 from spaceone.core.manager import BaseManager
 from spaceone.cost_analysis.error import *
-from spaceone.cost_analysis.connector import GoogleStorageConnector, SpaceONEConnector
+from spaceone.cost_analysis.connector import GoogleStorageConnector
 
 _LOGGER = logging.getLogger(__name__)
 
-_DEFAULT_BUCKET_NAME = 'mzc-billing'
 _PAGE_SIZE = 2000
 
 
 class CostManager(BaseManager):
 
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
         self.google_storage_connector: GoogleStorageConnector = self.locator.get_connector(GoogleStorageConnector)
-        self.space_connector: SpaceONEConnector = self.locator.get_connector(SpaceONEConnector)
 
     def get_data(self, options, secret_data, schema, task_options):
         self.google_storage_connector.create_session(options, secret_data, schema)
         self._check_task_options(task_options)
 
         start = task_options['start']
-        account_id = task_options['account_id']
-        service_account_id = task_options['service_account_id']
-        is_sync = task_options['is_sync']
-        sub_billing_account = task_options['sub_billing_account']
-
-        if is_sync == 'false':
-            self._update_sync_state(options, secret_data, schema, service_account_id)
-
-        exchange_rate_info = self._get_exchange_rate_info()
-
-        prefix = f'billing-data/{sub_billing_account}'
-        files_info = self.google_storage_connector.list_objects(_DEFAULT_BUCKET_NAME, prefix=prefix)
+        bucket_name = f'mzc-{task_options["bucket_name"]}'
+        files_info = self.google_storage_connector.list_objects(bucket_name)
         file_names = [file_info['name'] for file_info in files_info]
+        sub_billing_account_ids = self._list_sub_billing_account_ids(file_names)
 
         date_ranges = self._get_date_range(start)
         for date in date_ranges:
             year, month = date.split('-')
 
-            if exchange_rate := self._check_exchange_rate(year, month, exchange_rate_info):
+            for sub_billing_account_id in sub_billing_account_ids:
+                file_path = f'{sub_billing_account_id}/{year}/{month}/'
+                if file_path not in file_names:
+                    _LOGGER.debug(f'[get_data] target_file is not exist(/{bucket_name}/{file_path})')
+                    continue
+                else:
+                    if csv_file_path := self._get_csv_file_path(file_path, file_names):
 
-                target_file_path = prefix + f'/{year}/{month}/'
-                if target_file := self._create_target_file_path(file_names, target_file_path):
-
-                    blob = self.google_storage_connector.get_blob(_DEFAULT_BUCKET_NAME, target_file)
-                    response_stream = self._get_cost_data(data=blob.download_as_bytes(), target_file=target_file)
-                    for results in response_stream:
-                        yield self._make_cost_data(results, account_id, exchange_rate)
-
-            else:
-                continue
-
-        yield []
+                        blob = self.google_storage_connector.get_blob(bucket_name, csv_file_path)
+                        response_stream = self._get_cost_data(data=blob.download_as_bytes(), target_file=csv_file_path)
+                        for results in response_stream:
+                            yield self._make_cost_data(results)
+                    yield []
 
     @staticmethod
     def _check_task_options(task_options):
         if 'start' not in task_options:
             raise ERROR_REQUIRED_PARAMETER(key='task_options.start')
 
-        if 'account_id' not in task_options:
-            raise ERROR_REQUIRED_PARAMETER(key='task_options.account_id')
-
-        if 'service_account_id' not in task_options:
-            raise ERROR_REQUIRED_PARAMETER(key='task_options.service_account_id')
-
-        if 'is_sync' not in task_options:
-            raise ERROR_REQUIRED_PARAMETER(key='task_options.is_sync')
-
-        if 'sub_billing_account' not in task_options:
-            raise ERROR_REQUIRED_PARAMETER(key='task_options.sub_billing_account')
-
-    def _update_sync_state(self, options, secret_data, schema, service_account_id):
-        self.space_connector.init_client(options, secret_data, schema)
-        service_account_info = self.space_connector.get_service_account(service_account_id)
-        tags = service_account_info.get('tags', {})
-        tags['is_sync'] = 'true'
-        self.space_connector.update_service_account(service_account_id, tags)
+        if 'bucket_name' not in task_options:
+            raise ERROR_REQUIRED_PARAMETER(key='task_options.bucket_name')
 
     @staticmethod
     def _get_date_range(start):
@@ -96,24 +69,22 @@ class CostManager(BaseManager):
         return date_ranges
 
     @staticmethod
-    def _create_target_file_path(file_names, target_file_path):
-        if target_file_path not in file_names:
-            _LOGGER.debug(
-                f'[get_data] target_file is not exist(/{_DEFAULT_BUCKET_NAME}/{target_file_path})')
+    def _get_csv_file_path(file_path, file_names):
+        csv_files = [
+            file_name for file_name in file_names
+            if file_name.startswith(file_path) and file_name.endswith('.csv')
+        ]
+
+        if len(csv_files) > 1:
+            raise ERROR_TOO_MANY_CSV_FILES(target_dir=csv_files)
         else:
-            target_dir = [file_name for file_name in file_names
-                          if file_name.startswith(target_file_path) and file_name.endswith('.csv')]
+            return csv_files[0]
 
-            if len(target_dir) > 1:
-                raise ERROR_TOO_MANY_CSV_FILES(target_dir=target_dir)
-            else:
-                return target_dir[0]
-        return None
-
-    @staticmethod
-    def _get_cost_data(data, target_file):
+    def _get_cost_data(self, data, target_file):
         data_frame = pd.read_csv(io.BytesIO(data))
         data_frame = data_frame.replace({np.nan: None})
+
+        data_frame = self._apply_strip_to_columns(data_frame)
         costs_data = data_frame.to_dict('records')
 
         _LOGGER.debug(f'[get_cost_data] costs count({target_file}): {len(costs_data)}')
@@ -126,15 +97,21 @@ class CostManager(BaseManager):
             yield costs_data[offset:offset + _PAGE_SIZE]
 
     @staticmethod
-    def _make_cost_data(results, account_id, exchange_rate):
+    def _apply_strip_to_columns(data_frame):
+        columns = list(data_frame.columns)
+        columns = [column.strip() for column in columns]
+        data_frame.columns = columns
+        return data_frame
+
+    @staticmethod
+    def _make_cost_data(results):
         costs_data = []
 
         for result in results:
             try:
                 data = {
-                    'cost': result['Final Cost'],
-                    'usd_cost': result['Final Cost'] * (1 / exchange_rate),
-                    'currency': result['Currency'],
+                    'cost': result['소계'],
+                    'currency': 'KRW',
                     'usage_quantity': result['Usage'],
                     'provider': 'google_cloud',
                     'product': result['Service Name'],
@@ -153,28 +130,17 @@ class CostManager(BaseManager):
                 _LOGGER.error(f'[_make_cost_data] make data error: {e}', exc_info=True)
                 raise e
 
-            if account_id != 'global':
-                if data['account'] == account_id:
-                    costs_data.append(data)
-            else:
-                costs_data.append(data)
-        return costs_data
+            costs_data.append(data)
 
-    def _get_exchange_rate_info(self):
-        file_path = 'settings/exchange_rate.csv'
-        blob = self.google_storage_connector.get_blob(_DEFAULT_BUCKET_NAME, file_path)
-        exchange_rate_data = blob.download_as_bytes()
-
-        data_frame = pd.read_csv(io.BytesIO(exchange_rate_data))
-        data_frame = data_frame.replace({np.nan: None})
-        costs_data = data_frame.to_dict('records')
         return costs_data
 
     @staticmethod
-    def _check_exchange_rate(year, month, exchange_rate_info):
-        for exchange_rate in exchange_rate_info:
-            if exchange_rate['year'] == int(year) and exchange_rate['month'] == int(month):
-                return exchange_rate['KRW']
+    def _list_sub_billing_account_ids(file_names):
+        pattern = r'^[A-Z0-9]{6}-[A-Z0-9]{6}-[A-Z0-9]{6}/$'
 
-        _LOGGER.debug(f'[_exist_exchange_rate] exchange_rate is not exist({year}-{month})')
-        return None
+        sub_billing_account_ids = []
+        for file_name in file_names:
+            if re.match(pattern, file_name):
+                sub_billing_account_id, _ = file_name.split('/')
+                sub_billing_account_ids.append(sub_billing_account_id)
+        return sub_billing_account_ids

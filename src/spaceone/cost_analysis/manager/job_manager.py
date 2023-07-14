@@ -1,5 +1,4 @@
 import logging
-import re
 from datetime import datetime, timedelta
 
 from spaceone.core.manager import BaseManager
@@ -17,10 +16,6 @@ class JobManager(BaseManager):
         self.google_storage_connector: GoogleStorageConnector = self.locator.get_connector(GoogleStorageConnector)
 
     def get_tasks(self, options, secret_data, schema, start, last_synchronized_at, domain_id):
-        buckets = options.get('buckets', [])
-
-        if not buckets:
-            raise ERROR_REQUIRED_PARAMETER(key='options.buckets')
 
         tasks = []
         changed = []
@@ -30,6 +25,7 @@ class JobManager(BaseManager):
         changed_time = start_time
         self.google_storage_connector.create_session(options, secret_data, schema)
 
+        buckets = secret_data['buckets']
         for bucket in self.google_storage_connector.list_buckets():
             if bucket['name'].startswith('mzc-'):
                 prefix, bucket_name = bucket['name'].split('-')

@@ -37,7 +37,6 @@ class GoogleStorageConnector(BaseConnector):
         buckets = self.google_client.buckets().list(project=self.project_id).execute()
         return buckets.get('items', [])
 
-
     def list_objects(self, bucket_name, prefix=None):
         self.google_client.buckets().get(bucket=bucket_name).execute()
         objects = self.google_client.objects().list(bucket=bucket_name, prefix=prefix).execute()
@@ -61,3 +60,6 @@ class GoogleStorageConnector(BaseConnector):
 
         if 'client_email' not in secret_data:
             raise ERROR_REQUIRED_PARAMETER(key='secret_data.client_email')
+
+        if 'buckets' not in secret_data:
+            raise ERROR_REQUIRED_PARAMETER(key='secret_data.buckets')
