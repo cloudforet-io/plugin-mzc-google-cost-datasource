@@ -3,7 +3,7 @@ import io
 import re
 import pandas as pd
 import numpy as np
-from datetime import datetime
+from datetime import datetime, timedelta
 from dateutil import rrule
 
 from spaceone.core.manager import BaseManager
@@ -26,7 +26,9 @@ class CostManager(BaseManager):
         self._check_task_options(task_options)
 
         start = task_options['start']
-        bucket_name = f'mzc-{task_options["bucket_name"]}'
+        bucket_name = task_options['bucket_name']
+        target_sba_id = task_options.get('sub_billing_account_id')
+
         files_info = self.google_storage_connector.list_objects(bucket_name)
         file_names = [file_info['name'] for file_info in files_info]
         sub_billing_account_ids = self._list_sub_billing_account_ids(file_names)
@@ -34,20 +36,38 @@ class CostManager(BaseManager):
         date_ranges = self._get_date_range(start)
         for date in date_ranges:
             year, month = date.split('-')
+            end_date = self._get_end_date(year, month)
 
-            for sub_billing_account_id in sub_billing_account_ids:
-                file_path = f'{sub_billing_account_id}/{year}/{month}/'
+            if target_sba_id and target_sba_id in sub_billing_account_ids:
+                file_path = f'{target_sba_id}/{year}/{month}/'
+
                 if file_path not in file_names:
                     _LOGGER.debug(f'[get_data] target_file is not exist(/{bucket_name}/{file_path})')
                     continue
-                else:
-                    if csv_file_path := self._get_csv_file_path(file_path, file_names):
 
-                        blob = self.google_storage_connector.get_blob(bucket_name, csv_file_path)
-                        response_stream = self._get_cost_data(data=blob.download_as_bytes(), target_file=csv_file_path)
-                        for results in response_stream:
-                            yield self._make_cost_data(results)
-                    yield []
+                if csv_file_path := self._get_csv_file_path(file_path, file_names):
+
+                    blob = self.google_storage_connector.get_blob(bucket_name, csv_file_path)
+                    response_stream = self._get_cost_data(data=blob.download_as_bytes(),
+                                                          target_file=csv_file_path)
+                    for results in response_stream:
+                        yield self._make_cost_data(results, end_date)
+
+            elif target_sba_id is None:
+                for sub_billing_account_id in sub_billing_account_ids:
+                    file_path = f'{sub_billing_account_id}/{year}/{month}/'
+                    if file_path not in file_names:
+                        _LOGGER.debug(f'[get_data] target_file is not exist(/{bucket_name}/{file_path})')
+                        continue
+                    else:
+                        if csv_file_path := self._get_csv_file_path(file_path, file_names):
+
+                            blob = self.google_storage_connector.get_blob(bucket_name, csv_file_path)
+                            response_stream = self._get_cost_data(data=blob.download_as_bytes(),
+                                                                  target_file=csv_file_path)
+                            for results in response_stream:
+                                yield self._make_cost_data(results, end_date)
+            yield []
 
     @staticmethod
     def _check_task_options(task_options):
@@ -67,6 +87,12 @@ class CostManager(BaseManager):
             date_ranges.append(billed_month)
 
         return date_ranges
+
+    @staticmethod
+    def _get_end_date(year, month):
+        next_month = datetime(int(year), int(month) + 1, 1) if month != '12' else datetime(int(year) + 1, 1, 1)
+        end_date = next_month - timedelta(days=1)
+        return end_date.strftime('%Y-%m-%d')
 
     @staticmethod
     def _get_csv_file_path(file_path, file_names):
@@ -101,10 +127,19 @@ class CostManager(BaseManager):
         columns = list(data_frame.columns)
         columns = [column.strip() for column in columns]
         data_frame.columns = columns
+
+        if isinstance(data_frame['소계'].values[0], str):
+            data_frame['소계'] = data_frame['소계'].str.replace(',', '')
+            data_frame['소계'] = data_frame['소계'].astype(float)
+
         return data_frame
 
     @staticmethod
-    def _make_cost_data(results):
+    def _strip(value):
+        return value.strip() if isinstance(value, str) else value
+
+    @staticmethod
+    def _make_cost_data(results, end_date):
         costs_data = []
 
         for result in results:
@@ -112,17 +147,17 @@ class CostManager(BaseManager):
                 data = {
                     'cost': result['소계'],
                     'currency': 'KRW',
-                    'usage_quantity': result['Usage'],
+                    # 'usage_quantity': result['Usage'],
                     'provider': 'google_cloud',
                     'product': result['Service Name'],
-                    'region_code': result.get('Region') if result.get('Region') else 'global',
+                    # 'region_code': result.get('Region') if result.get('Region') else 'global',
                     'account': result.get('Project ID'),
                     'usage_type': result['SKU Name'],
-                    'usage_unit': result['Usage Unit'],
-                    'billed_at': datetime.strptime(result['End Date'], '%Y-%m-%d'),
+                    # 'usage_unit': result['Usage Unit'],
+                    'billed_at': datetime.strptime(end_date, '%Y-%m-%d'),
                     'additional_info': {
                         'Project Name': result.get('Project Name'),
-                        'Cost Type': result.get('Cost Type')
+                        # 'Cost Type': result.get('Cost Type')
                     },
                 }
 
