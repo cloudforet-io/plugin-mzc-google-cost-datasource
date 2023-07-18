@@ -1,13 +1,8 @@
 import logging
-# import boto3
-# import io
-# import pandas as pd
-# import numpy as np
 import google.oauth2.service_account
 from google.cloud import storage
 from googleapiclient.discovery import build
 
-from spaceone.core import utils
 from spaceone.core.connector import BaseConnector
 from spaceone.cost_analysis.error import *
 
@@ -61,5 +56,5 @@ class GoogleStorageConnector(BaseConnector):
         if 'client_email' not in secret_data:
             raise ERROR_REQUIRED_PARAMETER(key='secret_data.client_email')
 
-        if 'collect' not in secret_data:
-            raise ERROR_REQUIRED_PARAMETER(key='secret_data.collect')
+        if 'bucket' not in secret_data:
+            raise ERROR_REQUIRED_PARAMETER(key='secret_data.bucket')

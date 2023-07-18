@@ -7,8 +7,9 @@ __all__ = ['Tasks']
 
 class TaskOptions(Model):
     start = StringType(required=True)
-    bucket_name = StringType(required=True)
-    sub_billing_account_id = StringType(default=None)
+    bucket = StringType(required=True)
+    organization = StringType(required=True)
+    sub_billing_account = StringType(default=None)
 
 
 class Task(Model):
