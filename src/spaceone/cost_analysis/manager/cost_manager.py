@@ -30,6 +30,8 @@ class CostManager(BaseManager):
         organization = task_options['organization']
         sub_billing_account = task_options['sub_billing_account']
 
+        exchange_rate_data = self._get_exchange_rate_data()
+
         folders_info = self.google_storage_connector.list_objects(self.bucket)
         folder_names = [folder_info['name'] for folder_info in folders_info]
 
@@ -48,8 +50,10 @@ class CostManager(BaseManager):
                 blob = self.google_storage_connector.get_blob(self.bucket, csv_file)
                 response_stream = self._get_cost_data(data=blob.download_as_bytes(),
                                                       target_file=csv_file)
+                krw = self._set_exchange_rate(exchange_rate_data, year, month)
+
                 for results in response_stream:
-                    yield self._make_cost_data(results, end_date)
+                    yield self._make_cost_data(results, end_date, krw)
 
             yield []
 
@@ -72,6 +76,21 @@ class CostManager(BaseManager):
         if 'sub_billing_account' not in task_options:
             raise ERROR_REQUIRED_PARAMETER(key='task_options.sub_billing_account')
 
+    def _get_exchange_rate_data(self):
+        exchange_path = 'settings/exchange_rate.csv'
+        try:
+            blob = self.google_storage_connector.get_blob(self.bucket, exchange_path)
+            data_frame = pd.read_csv(io.BytesIO(blob.download_as_bytes()))
+            data_frame = data_frame.replace({np.nan: None})
+            data_frame['year'].astype(int)
+            data_frame['month'].astype(int)
+            exchange_rate_data = data_frame.to_dict('records')
+        except Exception as e:
+            _LOGGER.error(f'[_get_exchange_rate_data] {e}')
+            raise ERROR_EXCHANGE_RATE_DATA_NOT_FOUND()
+
+        return exchange_rate_data
+
     @staticmethod
     def _get_date_range(start):
         date_ranges = []
@@ -88,6 +107,17 @@ class CostManager(BaseManager):
         next_month = datetime(int(year), int(month) + 1, 1) if month != '12' else datetime(int(year) + 1, 1, 1)
         end_date = next_month - timedelta(days=1)
         return end_date.strftime('%Y-%m-%d')
+
+    @staticmethod
+    def _set_exchange_rate(exchange_rate_data, year, month):
+        krw = 0
+        for exchange_rate in exchange_rate_data:
+            if exchange_rate['year'] == int(year) and exchange_rate['month'] == int(month):
+                krw = int(exchange_rate['KRW'])
+                break
+        if not krw:
+            raise ERROR_NOT_FOUND_EXCHANGE_RATE(year=year, month=month)
+        return krw
 
     def _get_csv_file_path(self, folder_path, folder_names):
         csv_files = [
@@ -132,14 +162,14 @@ class CostManager(BaseManager):
         return data_frame
 
     @staticmethod
-    def _make_cost_data(results, end_date):
+    def _make_cost_data(results, end_date, krw):
         costs_data = []
 
         for result in results:
             try:
                 data = {
-                    'cost': result['소계'],
-                    'currency': 'KRW',
+                    'cost': result['소계'] * (1 / krw),
+                    'currency': 'USD',
                     # 'usage_quantity': result['Usage'],
                     'provider': 'google_cloud',
                     'product': result['Service Name'],
