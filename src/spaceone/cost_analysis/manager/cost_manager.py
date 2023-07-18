@@ -1,6 +1,5 @@
 import logging
 import io
-import re
 import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
@@ -20,63 +19,58 @@ class CostManager(BaseManager):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self.google_storage_connector: GoogleStorageConnector = self.locator.get_connector(GoogleStorageConnector)
+        self.bucket = None
 
     def get_data(self, options, secret_data, schema, task_options):
         self.google_storage_connector.create_session(options, secret_data, schema)
         self._check_task_options(task_options)
+        self.bucket = task_options['bucket']
 
         start = task_options['start']
-        bucket_name = task_options['bucket_name']
-        target_sba_id = task_options.get('sub_billing_account_id')
+        organization = task_options['organization']
+        sub_billing_account = task_options['sub_billing_account']
 
-        files_info = self.google_storage_connector.list_objects(bucket_name)
-        file_names = [file_info['name'] for file_info in files_info]
-        sub_billing_account_ids = self._list_sub_billing_account_ids(file_names)
+        folders_info = self.google_storage_connector.list_objects(self.bucket)
+        folder_names = [folder_info['name'] for folder_info in folders_info]
 
+        exist_cost_data = False
         date_ranges = self._get_date_range(start)
         _LOGGER.debug(f'[get_data] task_options: {task_options} / date ranges: {date_ranges[0]} ~ {date_ranges[-1]})')
+
         for date in date_ranges:
             year, month = date.split('-')
             end_date = self._get_end_date(year, month)
 
-            if target_sba_id and target_sba_id in sub_billing_account_ids:
-                file_path = f'{target_sba_id}/{year}/{month}/'
+            folder_path = f'{organization}/{sub_billing_account}/{year}/{month}/'
+            if csv_file := self._get_csv_file_path(folder_path, folder_names):
+                exist_cost_data = True
 
-                if file_path not in file_names:
-                    _LOGGER.debug(f'[get_data] target_file is not exist(/{bucket_name}/{file_path})')
-                    continue
+                blob = self.google_storage_connector.get_blob(self.bucket, csv_file)
+                response_stream = self._get_cost_data(data=blob.download_as_bytes(),
+                                                      target_file=csv_file)
+                for results in response_stream:
+                    yield self._make_cost_data(results, end_date)
 
-                if csv_file_path := self._get_csv_file_path(file_path, file_names):
-
-                    blob = self.google_storage_connector.get_blob(bucket_name, csv_file_path)
-                    response_stream = self._get_cost_data(data=blob.download_as_bytes(),
-                                                          target_file=csv_file_path)
-                    for results in response_stream:
-                        yield self._make_cost_data(results, end_date)
-
-            elif target_sba_id is None:
-                for sub_billing_account_id in sub_billing_account_ids:
-                    file_path = f'{sub_billing_account_id}/{year}/{month}/'
-                    if file_path not in file_names:
-                        _LOGGER.debug(f'[get_data] target_file is not exist(/{bucket_name}/{file_path})')
-                        continue
-                    else:
-                        if csv_file_path := self._get_csv_file_path(file_path, file_names):
-
-                            blob = self.google_storage_connector.get_blob(bucket_name, csv_file_path)
-                            response_stream = self._get_cost_data(data=blob.download_as_bytes(),
-                                                                  target_file=csv_file_path)
-                            for results in response_stream:
-                                yield self._make_cost_data(results, end_date)
             yield []
+
+        if not exist_cost_data:
+            _LOGGER.debug(
+                f'[get_data] There is no cost data in {self.bucket}/{organization}/{sub_billing_account} folder.'
+            )
 
     @staticmethod
     def _check_task_options(task_options):
         if 'start' not in task_options:
             raise ERROR_REQUIRED_PARAMETER(key='task_options.start')
 
-        if 'bucket_name' not in task_options:
-            raise ERROR_REQUIRED_PARAMETER(key='task_options.bucket_name')
+        if 'bucket' not in task_options:
+            raise ERROR_REQUIRED_PARAMETER(key='task_options.bucket')
+
+        if 'organization' not in task_options:
+            raise ERROR_REQUIRED_PARAMETER(key='task_options.organization')
+
+        if 'sub_billing_account' not in task_options:
+            raise ERROR_REQUIRED_PARAMETER(key='task_options.sub_billing_account')
 
     @staticmethod
     def _get_date_range(start):
@@ -95,15 +89,17 @@ class CostManager(BaseManager):
         end_date = next_month - timedelta(days=1)
         return end_date.strftime('%Y-%m-%d')
 
-    @staticmethod
-    def _get_csv_file_path(file_path, file_names):
+    def _get_csv_file_path(self, folder_path, folder_names):
         csv_files = [
-            file_name for file_name in file_names
-            if file_name.startswith(file_path) and file_name.endswith('.csv')
+            file_name for file_name in folder_names
+            if file_name.startswith(folder_path) and file_name.endswith('.csv')
         ]
 
         if len(csv_files) > 1:
             raise ERROR_TOO_MANY_CSV_FILES(target_dir=csv_files)
+        elif not csv_files:
+            _LOGGER.debug(f'[get_csv_file_path] csv file not found (path: {self.bucket}/{folder_path})')
+            return None
         else:
             return csv_files[0]
 
@@ -136,10 +132,6 @@ class CostManager(BaseManager):
         return data_frame
 
     @staticmethod
-    def _strip(value):
-        return value.strip() if isinstance(value, str) else value
-
-    @staticmethod
     def _make_cost_data(results, end_date):
         costs_data = []
 
@@ -158,6 +150,7 @@ class CostManager(BaseManager):
                     'billed_at': datetime.strptime(end_date, '%Y-%m-%d'),
                     'additional_info': {
                         'Project Name': result.get('Project Name'),
+                        'Sub Billing Account Name': result.get('SBA Name')
                         # 'Cost Type': result.get('Cost Type')
                     },
                 }
@@ -169,14 +162,3 @@ class CostManager(BaseManager):
             costs_data.append(data)
 
         return costs_data
-
-    @staticmethod
-    def _list_sub_billing_account_ids(file_names):
-        pattern = r'^[A-Z0-9]{6}-[A-Z0-9]{6}-[A-Z0-9]{6}/$'
-
-        sub_billing_account_ids = []
-        for file_name in file_names:
-            if re.match(pattern, file_name):
-                sub_billing_account_id, _ = file_name.split('/')
-                sub_billing_account_ids.append(sub_billing_account_id)
-        return sub_billing_account_ids
