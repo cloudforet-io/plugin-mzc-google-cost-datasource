@@ -30,7 +30,8 @@ project_id, private_key, token_uri and client_email can be obtained from api_key
     "private_key": "*****",
     "client_email": "<service_account_name>@<project_id>.iam.gserviceaccount.com",
     "token_uri": "https://oauth2.googleapis.com/token",
-    "bucket": "spaceone-billing-data"
+    "bucket": "spaceone-billing-data",
+    "folder": "*"
 }
 ```
 
@@ -46,15 +47,11 @@ project_id, private_key, token_uri and client_email can be obtained from api_key
     "client_email": "<service_account_name>@<project_id>.iam.gserviceaccount.com",
     "token_uri": "https://oauth2.googleapis.com/token",
     "bucket": "spaceone-billing-data",
-    "folders":[
-        "<organization name_1 (spaceone domain name)>",
-        "<organization name_2 (spaceone domain name)>",
-        "<organization name_3 (spaceone domain name)>"
-    ]
+    "folder": "<organization name_1 (spaceone domain name)>"
 }
 ```
 
-- When `folders` are set, cost data is collected for a specific subdivision of the `spaceone-billing-data` bucket.
+- Cost data is collected for a specific subdivision of the `spaceone-billing-data` bucket.
 
 <br>
 
