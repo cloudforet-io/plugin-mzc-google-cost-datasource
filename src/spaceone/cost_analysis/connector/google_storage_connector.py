@@ -58,3 +58,6 @@ class GoogleStorageConnector(BaseConnector):
 
         if 'bucket' not in secret_data:
             raise ERROR_REQUIRED_PARAMETER(key='secret_data.bucket')
+
+        if 'organization' not in secret_data:
+            raise ERROR_REQUIRED_PARAMETER(key='secret_data.organization')
