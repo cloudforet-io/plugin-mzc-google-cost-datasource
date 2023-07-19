@@ -3,6 +3,7 @@ import re
 from datetime import datetime, timedelta
 
 from spaceone.core.manager import BaseManager
+from spaceone.cost_analysis.error import *
 from spaceone.cost_analysis.connector import GoogleStorageConnector
 from spaceone.cost_analysis.model import Tasks
 
@@ -26,7 +27,7 @@ class JobManager(BaseManager):
         self.google_storage_connector.create_session(options, secret_data, schema)
 
         bucket = secret_data['bucket']
-        target_folders = secret_data.get('folders', [])
+        organization = secret_data['organization']
 
         for gcs_bucket in self.google_storage_connector.list_buckets():
             if gcs_bucket['name'] == bucket:
@@ -34,7 +35,7 @@ class JobManager(BaseManager):
                 folder_paths = [folder_info['name'] for folder_info in folders_info]
 
                 task_info = self._create_task_info(folder_paths)
-                task_info = self._change_valid_task_info(task_info, target_folders, bucket)
+                task_info = self._change_valid_task_info(task_info, organization, bucket)
 
                 for organization, sub_billing_accounts in task_info.items():
                     for sub_billing_account in sub_billing_accounts:
@@ -84,20 +85,22 @@ class JobManager(BaseManager):
                 continue
         return task_info
 
-    def _change_valid_task_info(self, task_info, target_folders, bucket_name):
+    def _change_valid_task_info(self, task_info, organization, bucket_name):
         valid_task_info = {}
-        for organization in task_info:
-            if target_folders:
-                if organization not in target_folders:
-                    _LOGGER.debug(f'[get_tasks] Not valid organization: {bucket_name}/{organization}')
-                else:
-                    valid_task_info[organization] = self._check_sub_billing_account_id(task_info[organization],
-                                                                                       organization,
+
+        if organization == '*':
+            for org_in_task_info in task_info:
+                valid_task_info[org_in_task_info] = self._check_sub_billing_account_id(task_info[org_in_task_info],
+                                                                                       org_in_task_info,
                                                                                        bucket_name)
-            else:
+        else:
+            if organization in task_info:
                 valid_task_info[organization] = self._check_sub_billing_account_id(task_info[organization],
                                                                                    organization,
                                                                                    bucket_name)
+            else:
+                _LOGGER.debug(f'[get_tasks] Not valid organization: {bucket_name}/{organization}')
+                raise ERROR_NOT_VALID_ORGANIZATION(organization=organization)
         return valid_task_info
 
     @staticmethod
